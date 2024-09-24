@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/components/ui/use-toast"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { UploadIcon, ImageIcon, Loader2Icon, SettingsIcon } from "lucide-react"
 
 const FLUX_MODEL_ENDPOINT = "https://api.replicate.com/v1/models/black-forest-labs/flux-dev/predictions"
@@ -33,6 +34,26 @@ function normalizeSettings(strength: number) {
   }
 }
 
+function ensureBase64Padding(base64: string): string {
+  const padding = base64.length % 4;
+  if (padding === 2) {
+    return base64 + '==';
+  } else if (padding === 3) {
+    return base64 + '=';
+  } else if (padding === 1) {
+    throw new Error("Invalid base64 string");
+  }
+  return base64;
+}
+
+interface Model {
+  name: string;
+  description: string;
+  owner: string;
+  visibility: string;
+  latest_version: string;
+}
+
 export default function Img2ImgFlux() {
   const [image, setImage] = useState<string | null>(null)
   const [prompt, setPrompt] = useState("")
@@ -42,7 +63,8 @@ export default function Img2ImgFlux() {
   const [apiKey, setApiKey] = useState("")
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [useFineTuned, setUseFineTuned] = useState(false)
-  const [modelVersion, setModelVersion] = useState("")
+  const [selectedModel, setSelectedModel] = useState<Model | null>(null)
+  const [models, setModels] = useState<Model[]>([])
   const { toast } = useToast()
   const abortControllerRef = useRef<AbortController | null>(null)
   const [predictionId, setPredictionId] = useState<string | null>(null)
@@ -53,8 +75,36 @@ export default function Img2ImgFlux() {
     const storedApiKey = localStorage.getItem("replicateApiKey")
     if (storedApiKey) {
       setApiKey(storedApiKey)
+      fetchModels(storedApiKey)
     }
   }, [])
+
+  const fetchModels = async (key: string) => {
+    try {
+      const response = await fetch("/api/replicate/models", {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${key}`
+        }
+      })
+      if (!response.ok) throw new Error("Failed to fetch models")
+      const data: Model[] = await response.json()
+      if (Array.isArray(data) && data.length > 0) {
+        setModels(data)
+        setSelectedModel(data[0])
+      } else {
+        throw new Error("No models found")
+      }
+    } catch (error) {
+      console.error("Error fetching models:", error)
+      toast({
+        title: "Error",
+        description: "Failed to fetch models. Please check your API key.",
+        variant: "destructive",
+      })
+    }
+  }
 
   useEffect(() => {
     let intervalId: NodeJS.Timeout | null = null;
@@ -122,6 +172,7 @@ export default function Img2ImgFlux() {
   const handleApiKeySave = () => {
     localStorage.setItem("replicateApiKey", apiKey)
     setIsSettingsOpen(false)
+    fetchModels(apiKey)
     toast({
       title: "API Key Saved",
       description: "Your Replicate API key has been saved.",
@@ -161,7 +212,7 @@ export default function Img2ImgFlux() {
       }
 
       if (image) {
-        (input as any).image = image
+        (input as any).image = ensureBase64Padding(image)
       }
 
       const body = { input }
@@ -175,6 +226,7 @@ export default function Img2ImgFlux() {
           apiKey,
           body,
           modelEndpoint: FLUX_MODEL_ENDPOINT,
+          selectedModelVersion: useFineTuned && selectedModel ? selectedModel.latest_version : undefined,
         }),
         signal: abortControllerRef.current.signal,
       })
@@ -313,6 +365,35 @@ export default function Img2ImgFlux() {
                   onValueChange={(value) => setStrength(value[0])}
                   className="w-full"
                 />
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="use-fine-tuned"
+                    checked={useFineTuned}
+                    onCheckedChange={setUseFineTuned}
+                  />
+                  <Label htmlFor="use-fine-tuned">Use Fine-tuned Model</Label>
+                </div>
+                {useFineTuned && (
+                  <div className="space-y-2">
+                    <Label htmlFor="model-select" className="text-lg font-medium text-purple-700">
+                      Select Model
+                    </Label>
+                    <Select onValueChange={(value) => setSelectedModel(models.find(m => m.name === value) || null)} value={selectedModel?.name}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select a model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {models.map((model) => (
+                          <SelectItem key={model.name} value={model.name}>
+                            {model.name} - {model.description}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
               <Button
                 type={loading ? "button" : "submit"}
